@@ -13,15 +13,6 @@ func boolToInt(val bool) int {
 	return 0
 }
 
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
 func createTempDirectory(path string) error {
 	err := os.MkdirAll(filepath.Dir(path), 0755)
 	if err != nil {

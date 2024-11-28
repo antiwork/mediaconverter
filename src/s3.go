@@ -14,12 +14,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-func downloadFromS3(s3URI string, localPath string) error {
+func downloadFromS3(ctx context.Context, s3URI string, localPath string) error {
 	log.Printf("downloading from %s to %s\n", s3URI, localPath)
 
 	bucket, key := parseS3URI(s3URI)
 
-	output, err := awsClient.GetObject(context.TODO(), &s3.GetObjectInput{
+	output, err := awsClient.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -44,7 +44,7 @@ func downloadFromS3(s3URI string, localPath string) error {
 	return nil
 }
 
-func uploadToS3(localDir string, s3URI string) error {
+func uploadToS3(ctx context.Context, localDir string, s3URI string) error {
 	log.Printf("uploading from %s to %s\n", localDir, s3URI)
 
 	bucket, key := parseS3URI(s3URI)
@@ -60,8 +60,9 @@ func uploadToS3(localDir string, s3URI string) error {
 		if err != nil {
 			return fmt.Errorf("failed to open HLS file: %v", err)
 		}
+		defer fileContent.Close()
 
-		_, err = awsClient.PutObject(context.TODO(), &s3.PutObjectInput{
+		_, err = awsClient.PutObject(ctx, &s3.PutObjectInput{
 			Bucket: aws.String(bucket),
 			Key:    aws.String(filepath.Join(key, file.Name())),
 			Body:   fileContent,
@@ -70,8 +71,6 @@ func uploadToS3(localDir string, s3URI string) error {
 		if err != nil {
 			return fmt.Errorf("failed to upload HLS file to S3: %v", err)
 		}
-
-		fileContent.Close()
 	}
 
 	return nil

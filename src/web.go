@@ -134,7 +134,7 @@ func handleUp(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "Ok.")
 }
 
-func startWebServer(port string) {
+func startWebServer(port string) error {
 	logRequests := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestID := fmt.Sprintf("%x", rand.Int63())[:10]
@@ -156,5 +156,5 @@ func startWebServer(port string) {
 	r.HandleFunc("/up", handleUp).Methods("GET")
 
 	fmt.Println("Starting web server on " + port)
-	http.ListenAndServe(":"+port, r)
+	return http.ListenAndServe(":"+port, r)
 }
