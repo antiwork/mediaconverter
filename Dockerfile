@@ -8,7 +8,7 @@ ENV CGO_ENABLED=0 GOOS=linux
 
 RUN go build -o mediaconverter
 
-FROM ubuntu:24.10
+FROM ubuntu:24.04
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
