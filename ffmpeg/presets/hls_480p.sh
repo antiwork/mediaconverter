@@ -2,8 +2,16 @@
 
 set -ex
 
+SCALE_FILTER=${SCALE_FILTER:-scale}
+
+if [ "$SCALE_FILTER" = "zscale" ]; then
+    FILTER_OPTS="zscale=-2:480:min=bt709:m=bt709"
+else
+    FILTER_OPTS="scale=-2:480"
+fi
+
 ffmpeg -i "$input_video" \
--vf "scale=-2:480" \
+-vf "$FILTER_OPTS" \
 -c:v libx264 \
 -b:v 700k \
 -maxrate 700k \

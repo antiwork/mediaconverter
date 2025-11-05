@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -101,8 +102,45 @@ func downloadVideo(job Job, videoPath string) error {
 	return downloadFromS3(job.Request.S3VideoURI, videoPath)
 }
 
+func detectVideoCodec(job Job, videoPath string) (string, error) {
+	log.Printf("[jid: %s] Detecting video codec...\n", job.JobID)
+
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=codec_name",
+		"-of", "default=nw=1:nk=1",
+		videoPath)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to detect codec: %v", err)
+	}
+
+	codec := strings.TrimSpace(string(output))
+	log.Printf("[jid: %s] Detected codec: %s\n", job.JobID, codec)
+
+	return codec, nil
+}
+
+func determineScaleFilter(codec string) string {
+	if codec == "dxv" {
+		return "zscale"
+	}
+	return "scale"
+}
+
 func runConversionScript(job Job, inputPath, outputDir string) error {
 	log.Printf("[jid: %s] Running conversion script...\n", job.JobID)
+
+	codec, err := detectVideoCodec(job, inputPath)
+	scaleFilter := "scale"
+	if err != nil {
+		log.Printf("[jid: %s] Warning: codec detection failed (%v), defaulting to scale filter\n", job.JobID, err)
+	} else {
+		scaleFilter = determineScaleFilter(codec)
+		log.Printf("[jid: %s] Using %s filter for codec %s\n", job.JobID, scaleFilter, codec)
+	}
 
 	cmd := exec.Command("./ffmpeg/convert-video.sh")
 	cmd.Env = append(os.Environ(),
@@ -111,6 +149,7 @@ func runConversionScript(job Job, inputPath, outputDir string) error {
 		fmt.Sprintf("hls_480p=%d", boolToInt(contains(job.Request.Presets, "hls_480p"))),
 		fmt.Sprintf("hls_720p=%d", boolToInt(contains(job.Request.Presets, "hls_720p"))),
 		fmt.Sprintf("hls_1080p=%d", boolToInt(contains(job.Request.Presets, "hls_1080p"))),
+		fmt.Sprintf("SCALE_FILTER=%s", scaleFilter),
 	)
 
 	if err := cmd.Run(); err != nil {
