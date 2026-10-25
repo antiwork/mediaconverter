@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -25,6 +26,8 @@ type Job struct {
 }
 
 var MaxSimultaneousJobs int
+
+var callbackClient = &http.Client{Timeout: 30 * time.Second}
 
 var JobQueue chan Job
 var RunningJobs = map[string]Job{}
@@ -98,6 +101,9 @@ func setupPaths(jobID string) (string, string) {
 func downloadVideo(job Job, videoPath string) error {
 	log.Printf("[jid: %s] Downloading video\n", job.JobID)
 
+	if job.Request.VideoURL != "" {
+		return downloadFromURL(job.Request.VideoURL, videoPath)
+	}
 	return downloadFromS3(job.Request.S3VideoURI, videoPath)
 }
 
@@ -108,9 +114,9 @@ func runConversionScript(job Job, inputPath, outputDir string) error {
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("input_video=%s", inputPath),
 		fmt.Sprintf("output_dir=%s", outputDir),
-		fmt.Sprintf("hls_480p=%d", boolToInt(contains(job.Request.Presets, "hls_480p"))),
-		fmt.Sprintf("hls_720p=%d", boolToInt(contains(job.Request.Presets, "hls_720p"))),
-		fmt.Sprintf("hls_1080p=%d", boolToInt(contains(job.Request.Presets, "hls_1080p"))),
+		fmt.Sprintf("hls_480p=%d", boolToInt(slices.Contains(job.Request.Presets, "hls_480p"))),
+		fmt.Sprintf("hls_720p=%d", boolToInt(slices.Contains(job.Request.Presets, "hls_720p"))),
+		fmt.Sprintf("hls_1080p=%d", boolToInt(slices.Contains(job.Request.Presets, "hls_1080p"))),
 	)
 
 	if err := cmd.Run(); err != nil {
@@ -129,15 +135,19 @@ func uploadHLSFiles(job Job, localDir string) error {
 }
 
 func finishJobSuccessfully(job Job) {
-	postToCallback(job, "success", "")
-	cleanUpJob(job)
+	finishJob(job, "success", "")
 }
 
 func handleJobFailure(job Job, errorMsg string) {
 	log.Printf("[jid: %s] Job failed. Error: %s\n", job.JobID, errorMsg)
 
-	postToCallback(job, "failure", errorMsg)
+	finishJob(job, "failure", errorMsg)
+}
+
+// Callback retries can sleep for over 20 minutes, so they don't hold the worker or the job's files.
+func finishJob(job Job, status string, message string) {
 	cleanUpJob(job)
+	go postToCallback(job, status, message)
 }
 
 func postToCallback(job Job, status string, message string) {
@@ -159,40 +169,42 @@ func postToCallback(job Job, status string, message string) {
 	signature := hex.EncodeToString(h.Sum(nil))
 
 	retryIntervals := []time.Duration{time.Minute * 1, time.Minute * 5, time.Minute * 15, time.Minute * 30}
-	var resp *http.Response
-	var err error
 
 	for i, interval := range retryIntervals {
-
-		req, reqErr := http.NewRequest("POST", job.Request.CallbackURL, bytes.NewReader(jsonPayload))
-		if reqErr != nil {
-			log.Printf("[jid: %s] Failed to create request: %v\n", job.JobID, reqErr)
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		timestamp := time.Now().UnixMilli()
-		req.Header.Set("Grmc-Signature", fmt.Sprintf("t=%d,v0=%s", timestamp, signature))
-
-		client := &http.Client{}
-		resp, err = client.Do(req)
-		if err == nil && resp.StatusCode == 200 {
+		err := sendCallback(job.Request.CallbackURL, jsonPayload, signature)
+		if err == nil {
 			log.Printf("[jid: %s] Successfully posted callback\n", job.JobID)
-			break
+			return
 		}
 
 		if i == len(retryIntervals)-1 {
 			log.Printf("[jid: %s] Failed to post callback after all retries: %v\n", job.JobID, err)
-			break
+			return
 		}
 
-		log.Printf("[jid: %s] Failed to post callback (attempt %d): %v / %s. Retrying in %v...\n", job.JobID, i+1, err, resp.Status, interval)
+		log.Printf("[jid: %s] Failed to post callback (attempt %d): %v. Retrying in %v...\n", job.JobID, i+1, err, interval)
 		time.Sleep(interval)
 	}
+}
 
-	if resp != nil {
-		resp.Body.Close()
+func sendCallback(callbackURL string, payload []byte, signature string) error {
+	req, err := http.NewRequest("POST", callbackURL, bytes.NewReader(payload))
+	if err != nil {
+		return err
 	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Grmc-Signature", fmt.Sprintf("t=%d,v0=%s", time.Now().UnixMilli(), signature))
+
+	resp, err := callbackClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected response: %s", resp.Status)
+	}
+	return nil
 }
 
 func cleanUpJob(job Job) {
