@@ -9,6 +9,8 @@ A video conversion service that transforms video files into HLS streaming format
 Requires authentication. Enqueues an internal job to convert a video.
 If too many jobs are already processing, the request will be rejected with a 429 status code.
 
+Pass an optional `video_url` (for example, a signed CloudFront URL) to download the source video over HTTPS instead of from `s3_video_uri`. Either one is required.
+
 ```shell
 curl --basic -u $YOUR_API_KEY: -X POST $GRMC_SERVER/convert -H "Content-Type: application/json" -d '{ "id": "123456", "s3_video_uri": "s3://[......]", "s3_hls_dir_uri": "s3://[......]/hls/", "presets": ["hls_480p", "hls_720p"], "callback_url": "https://example.com/callback" }'
 
@@ -43,6 +45,9 @@ docker run -p 7454:7454 --env-file .env $(docker build -f Dockerfile . -q)
 
 # Outside of docker
 make && dotenv -f .env ./mediaconverter
+
+# Tests
+make test
 ```
 
 ## Deployment to production

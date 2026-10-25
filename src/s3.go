@@ -6,13 +6,17 @@ import (
 	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+const maxConcurrentUploads = 16
 
 func downloadFromS3(s3URI string, localPath string) error {
 	log.Printf("downloading from %s to %s\n", s3URI, localPath)
@@ -54,26 +58,54 @@ func uploadToS3(localDir string, s3URI string) error {
 		return fmt.Errorf("failed to read HLS output directory: %v", err)
 	}
 
+	// Each PutObject is mostly round-trip latency to us-east-1, so upload segments in parallel.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var uploadErr error
+	slots := make(chan struct{}, maxConcurrentUploads)
+
 	for _, file := range files {
-		filePath := filepath.Join(localDir, file.Name())
-		fileContent, err := os.Open(filePath)
-		if err != nil {
-			return fmt.Errorf("failed to open HLS file: %v", err)
+		slots <- struct{}{}
+		if ctx.Err() != nil {
+			break
 		}
 
-		_, err = awsClient.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(filepath.Join(key, file.Name())),
-			Body:   fileContent,
-			ACL:    types.ObjectCannedACLPublicRead,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to upload HLS file to S3: %v", err)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
 
-		fileContent.Close()
+			if err := uploadFileToS3(ctx, filepath.Join(localDir, file.Name()), bucket, path.Join(key, file.Name())); err != nil {
+				errOnce.Do(func() {
+					uploadErr = err
+					cancel()
+				})
+			}
+		}()
 	}
+	wg.Wait()
 
+	return uploadErr
+}
+
+func uploadFileToS3(ctx context.Context, localPath string, bucket string, key string) error {
+	fileContent, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to open HLS file: %v", err)
+	}
+	defer fileContent.Close()
+
+	_, err = awsClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   fileContent,
+		ACL:    types.ObjectCannedACLPublicRead,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to upload HLS file to S3: %v", err)
+	}
 	return nil
 }
 

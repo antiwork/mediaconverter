@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"maps"
-	"math/rand"
 	"net/http"
 	"os"
 	"slices"
@@ -19,6 +18,7 @@ import (
 // Struct for the POST request to /convert
 type ConvertRequest struct {
 	S3VideoURI  string   `json:"s3_video_uri"`
+	VideoURL    string   `json:"video_url"` // Optional; downloaded instead of S3VideoURI when set
 	S3HLSDirURI string   `json:"s3_hls_dir_uri"`
 	Presets     []string `json:"presets"`
 	ID          string   `json:"id"`
@@ -73,12 +73,12 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate request
-	if req.S3VideoURI == "" || req.S3HLSDirURI == "" || len(req.Presets) == 0 || req.ID == "" || req.CallbackURL == "" {
+	if (req.S3VideoURI == "" && req.VideoURL == "") || req.S3HLSDirURI == "" || len(req.Presets) == 0 || req.ID == "" || req.CallbackURL == "" {
 		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
 	}
 
-	jobID := fmt.Sprintf("%x", rand.Int63())[:10]
+	jobID := randomID()
 	job := Job{
 		JobID:     jobID,
 		Request:   req,
@@ -104,10 +104,9 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
-	var jobs = []Job{}
-	if len(RunningJobs) > 0 {
-		jobs = slices.Collect(maps.Values(RunningJobs))
-	}
+	JobMutex.Lock()
+	jobs := slices.AppendSeq([]Job{}, maps.Values(RunningJobs))
+	JobMutex.Unlock()
 
 	response := map[string][]Job{
 		"running_jobs": jobs,
@@ -137,7 +136,7 @@ func handleUp(w http.ResponseWriter, r *http.Request) {
 func startWebServer(port string) {
 	logRequests := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			requestID := fmt.Sprintf("%x", rand.Int63())[:10]
+			requestID := randomID()
 			log.Printf("[rid: %s] Processing %s request for %s from %s\n", requestID, r.Method, r.URL.Path, r.RemoteAddr)
 
 			start := time.Now()
