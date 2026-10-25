@@ -26,20 +26,24 @@ complete_master_playlist() {
   height="$1"
 
   # Extract current bandwidth from the master playlist
-  current_bandwidth=$(grep 'BANDWIDTH' "$output_dir/master_${height}p.m3u8" | sed -n 's/.*BANDWIDTH=\([0-9]*\).*/\1/p' | head -1)
+  # Anchored on ":" so it can't match AVERAGE-BANDWIDTH
+  current_bandwidth=$(sed -n 's/.*:BANDWIDTH=\([0-9]*\).*/\1/p' "$output_dir/master_${height}p.m3u8" | head -1)
   if [[ -z "$current_bandwidth" ]]; then
     echo "Failed to extract bandwidth"
     return 1
   fi
 
-  # Calculate 75% of the current bandwidth for average bandwidth
-  average_bandwidth=$(($current_bandwidth * 75 / 100))
+  # ffmpeg 8 writes a measured AVERAGE-BANDWIDTH; older versions get an estimate of 75% of peak
+  attributes=",FRAME-RATE=30.000"
+  if ! grep -q 'AVERAGE-BANDWIDTH=' "$output_dir/master_${height}p.m3u8"; then
+    attributes=",AVERAGE-BANDWIDTH=$(($current_bandwidth * 75 / 100))$attributes"
+  fi
 
   # Update master playlist with the new average bandwidth and frame rate
   if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i "" "s/\(BANDWIDTH=$current_bandwidth\)/\1,AVERAGE-BANDWIDTH=$average_bandwidth,FRAME-RATE=30.000/" "$output_dir/master_${height}p.m3u8"
+    sed -i "" "s/\(:BANDWIDTH=$current_bandwidth\)/\1$attributes/" "$output_dir/master_${height}p.m3u8"
   else
-    sed -i "s/\(BANDWIDTH=$current_bandwidth\)/\1,AVERAGE-BANDWIDTH=$average_bandwidth,FRAME-RATE=30.000/" "$output_dir/master_${height}p.m3u8"
+    sed -i "s/\(:BANDWIDTH=$current_bandwidth\)/\1$attributes/" "$output_dir/master_${height}p.m3u8"
   fi
 
   if [ $? -ne 0 ]; then
