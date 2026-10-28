@@ -4,6 +4,8 @@ A video conversion service that transforms video files into HLS streaming format
 
 ## Endpoints
 
+`/convert` and `/status` take `API_KEY` as the Basic-auth username. `API_KEY` can list several comma-separated keys, so a new key can be added before the old one is removed.
+
 ### POST /convert
 
 Requires authentication. Enqueues an internal job to convert a video.
