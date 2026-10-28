@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -52,11 +53,31 @@ func AuthenticateRequest(r *http.Request) error {
 		return fmt.Errorf("invalid Authorization header content")
 	}
 
-	if pair[0] != os.Getenv("API_KEY") {
+	if !validAPIKey(pair[0]) {
 		return fmt.Errorf("unauthorized")
 	}
 
 	return nil
+}
+
+// API_KEY can hold several comma-separated keys, so a new key can be added before the old one is removed.
+func apiKeys() []string {
+	var keys []string
+	for _, k := range strings.Split(os.Getenv("API_KEY"), ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+func validAPIKey(key string) bool {
+	for _, k := range apiKeys() {
+		if subtle.ConstantTimeCompare([]byte(k), []byte(key)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // Handler for POST /convert
@@ -115,13 +136,16 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUp(w http.ResponseWriter, r *http.Request) {
-	requiredEnvVars := []string{"PORT", "API_KEY", "MAX_SIMULTANEOUS_JOBS", "AWS_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+	requiredEnvVars := []string{"PORT", "MAX_SIMULTANEOUS_JOBS", "AWS_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
 	missingVars := []string{}
 
 	for _, envVar := range requiredEnvVars {
 		if os.Getenv(envVar) == "" {
 			missingVars = append(missingVars, envVar)
 		}
+	}
+	if len(apiKeys()) == 0 {
+		missingVars = append(missingVars, "API_KEY")
 	}
 
 	if len(missingVars) > 0 {
